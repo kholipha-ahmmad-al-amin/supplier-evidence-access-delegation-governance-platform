@@ -1,0 +1,21 @@
+import express from 'express';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DelegationGovernanceService, DomainError } from './domain.mjs';
+import { AtomicJsonStore } from './store.mjs';
+const root = dirname(fileURLToPath(import.meta.url));
+const store = new AtomicJsonStore(join(root, 'data', 'delegations.json'));
+const snapshot = await store.load();
+const service = new DelegationGovernanceService({ cases: snapshot.cases, persist: (next) => store.save(next) });
+export const app = express(); app.use(express.json({ limit: '100kb' }));
+const actor = (request) => ({ id: request.header('x-actor-id'), role: request.header('x-actor-role') });
+const respond = async (response, action) => { try { response.json({ data: await action() }); } catch (error) { response.status(error instanceof DomainError ? error.statusCode : 500).json({ error: { code: error.code || 'INTERNAL_ERROR', message: error.message || 'Unexpected failure.' } }); } };
+app.get('/health', (_request, response) => response.json({ status: 'ok', service: 'supplier-evidence-access-delegation-governance' }));
+app.get('/v1/cases', (_request, response) => response.json({ data: service.list() }));
+app.get('/v1/cases/:id', (request, response) => respond(response, () => service.get(request.params.id)));
+app.post('/v1/cases', (request, response) => respond(response, () => service.request(actor(request), request.body)));
+app.post('/v1/cases/:id/review', (request, response) => respond(response, () => service.review(request.params.id, actor(request), request.body)));
+app.post('/v1/cases/:id/approve', (request, response) => respond(response, () => service.approve(request.params.id, actor(request), request.body)));
+app.post('/v1/cases/:id/activate', (request, response) => respond(response, () => service.activate(request.params.id, actor(request), request.body)));
+app.post('/v1/cases/:id/close', (request, response) => respond(response, () => service.close(request.params.id, actor(request), request.body)));
+if (process.env.NODE_ENV !== 'test') { const port = Number(process.env.PORT || 61900); app.listen(port, '0.0.0.0', () => console.log(`Delegation-governance API listening on ${port}`)); }
